@@ -471,8 +471,8 @@ if __name__ == "__main__":
     max_epochs = 20
     z_dim = 4096
 
-    barlow_path = Path(r"C:\Users\fayaz\NTNU\barlow\train_images")
-    dataset_path = Path(r"C:\Users\fayaz\NTNU\Norsvin\Norsvin")
+    barlow_path = Path(r"/home/user-1/Detection/tracking/train") #C:\Users\fayaz\NTNU\barlow\train_images
+    dataset_path = Path(r"/home/user-1/Detection/tracking") #C:\Users\fayaz\NTNU\Norsvin\Norsvin 
 
     train_images_path = dataset_path / "train/images"
     val_images_path = dataset_path / "val/images"
@@ -534,5 +534,5 @@ if __name__ == "__main__":
     trainer.fit(model, dm)
 
     torch.save(
-        encoder.state_dict(), f"results/weights/barlow_pretrained_weights_backbone"
+        encoder.state_dict(), f"/home/results" #results/weights/barlow_pretrained_weights_backbone
     )

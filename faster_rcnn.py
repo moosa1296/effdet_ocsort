@@ -86,7 +86,7 @@ class FasterRCNNModel(LightningModule):
     ):
         super().__init__()
 
-        dataset_path = Path("C:/Users/fayaz/NTNU/Norsvin/Norsvin/")
+        dataset_path = Path("C:/Users/fayaz/NTNU/Norsvin/Norsvin/") #/home/user-1/Detection/tracking
 
         train_images_path = dataset_path / "train/images"
         train_anns_path = dataset_path / "train/annotations"

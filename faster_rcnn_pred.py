@@ -15,14 +15,14 @@ def rescale_boxes(boxes, image):
 
 if __name__ == "__main__":
     idx = 120
-    dataset_path = Path("C:/Users/fayaz/NTNU/Norsvin/Norsvin/")
+    dataset_path = Path("C:/Users/fayaz/NTNU/Norsvin/Norsvin/") #/home/user-1/Detection/tracking
     val_images_path = dataset_path / "val/images"
     val_anns_path = dataset_path / "val/annotations"
 
     dataset = PigsDataset(val_images_path, val_anns_path)
 
     model = FasterRCNNModel(num_classes=2)
-    model.load_state_dict(torch.load("results/weights/faster_rcnn_weights"))
+    model.load_state_dict(torch.load("results/weights/faster_rcnn_weights")) #/home/results
     model.eval()
 
     image, target = dataset[idx]

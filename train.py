@@ -11,23 +11,20 @@ from torch.utils.data import DataLoader
 from effdet.config.model_config import efficientdet_model_param_dict
 from effdet import get_efficientdet_config, EfficientDet, DetBenchTrain
 from effdet.efficientdet import HeadNet
-from effdet.config.model_config import efficientdet_model_param_dict
 from effdet.soft_nms import soft_nms
-from effdet.smart_nms import smart_nms
 from torch.utils.data import Dataset
 from albumentations.pytorch.transforms import ToTensorV2
 from typing import List
 from fastcore.dispatch import typedispatch
 from ensemble_boxes import ensemble_boxes_wbf
 from effdet.efficientdet import HeadNet
-
 import os
-
 import numpy as np
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import albumentations as A
 import torch
+import re
 
 architecture = "tf_efficientdet_d0"
 img_size = (512, 512)
@@ -44,8 +41,8 @@ def get_rectangle_edges_from_pascal_bbox(bbox):
 
 
 def get_pascal_bbox(bbox):
-    xmin, ymin = bbox[0], bbox[1]
-    width, height = bbox[2], bbox[3]
+    xmin, ymin = bbox['x'], bbox['y']
+    width, height = bbox['w'], bbox['h']
     xmax = xmin + width
     ymax = ymin + height
     return [xmin, ymin, xmax, ymax]
@@ -85,15 +82,16 @@ def draw_pascal_voc_bboxes(
             fill=False,
         )
 
-        if confidences:
+        if confidences[i] > .48:
             rx, ry = rect_2.get_xy()
             plot_ax.annotate(
                 np.round(confidences[i], 2), (rx, ry), color="red", weight="bold"
             )
 
         # Add the patch to the Axes
-        plot_ax.add_patch(rect_1)
-        plot_ax.add_patch(rect_2)
+        if confidences[i] > .48:
+            plot_ax.add_patch(rect_1)
+            plot_ax.add_patch(rect_2)
 
 
 def show_image(
@@ -110,26 +108,30 @@ def show_image(
 
 class PigsDatasetAdapter:
     def __init__(self, images_path, anns_path):
-        self.image_paths = [images_path / path for path in os.listdir(images_path)]
+        image_files = os.listdir(images_path)
+        image_files.sort(key=lambda x: int(re.findall(r"(\d+)\.jpg$", x)[0]))
+        self.image_paths = [images_path / path for path in image_files]
         self.coco_anns = [
-            COCO(anns_path / (path[:-4] + ".json")) for path in os.listdir(images_path)
+            COCO(anns_path / (path.split('.')[0] + ".json")) for path in image_files
         ]
-
+        self.frame_num = [path.split('_')[-1].split('.')[0] for path in image_files]
     def __len__(self):
         return len(self.image_paths)
-
+    
     def get_image_and_labels_by_idx(self, index):
         image = Image.open(self.image_paths[index])
         coco = self.coco_anns[index]
         anns = coco.loadAnns(coco.getAnnIds())
         boxes = np.zeros((len(anns), 4))
         bad_anns = []
+        print(self.image_paths[index])
         for i, ann in enumerate(anns):
             try:
-                boxes[i, :] = get_pascal_bbox(ann["bbox"])
-                if np.all(boxes[i, :] == 0):
-                    bad_anns.append(i)
-                    continue
+                if ann['frames'].get(self.frame_num[index]) is not None:
+                    boxes[i, :] = get_pascal_bbox(ann["frames"][self.frame_num[index]].get("bounding_box"))
+                    if np.all(boxes[i, :] == 0):
+                        bad_anns.append(i)
+                        continue
             except ValueError:
                 print("--- BAD BOX ---")
                 print("--- image id: {} ---".format(i))
@@ -139,7 +141,7 @@ class PigsDatasetAdapter:
         labels = np.ones(len(anns))
         labels = np.delete(labels, bad_anns, 0)
 
-        return image, boxes, labels, index
+        return image, boxes, labels, index, self.frame_num
 
     def show_image(self, index):
         image, bboxes, class_labels, image_id = self.get_image_and_labels_by_idx(index)
@@ -149,14 +151,6 @@ class PigsDatasetAdapter:
 
 
 def create_model(num_classes=1, image_size=512, architecture="tf_efficientnetv2_l"):
-    # efficientdet_model_param_dict["tf_efficientnetv2_l"] = dict(
-    #     name="tf_efficientnetv2_l",
-    #     backbone_name="tf_efficientnetv2_l",
-    #     backbone_args=dict(drop_path_rate=0.2),
-    #     num_classes=num_classes,
-    #     url="",
-    # )
-
     config = get_efficientdet_config(architecture)
     config.update({"num_classes": num_classes})
     config.update({"image_size": (image_size, image_size)})
@@ -166,9 +160,6 @@ def create_model(num_classes=1, image_size=512, architecture="tf_efficientnetv2_
     net = EfficientDet(config, pretrained_backbone=True)
     net.class_net = nn.Identity()
     net.box_net = nn.Identity()
-    # net.load_state_dict(
-    #     torch.load("results/weights/barlow_pretrained_weights_backbone")
-    # )
     net.class_net = HeadNet(config, num_outputs=config.num_classes)
     net.box_net = HeadNet(config, num_outputs=4)
     return DetBenchTrain(net, config)
@@ -407,17 +398,6 @@ class EfficientDetModel(LightningModule):
         return self.model(images, targets)
 
     def configure_optimizers(self):
-        # optimizer = torch.optim.SGD(
-        #     self.model.parameters(),
-        #     lr=self.lr,
-        #     momentum=0.9,
-        #     weight_decay=4e-5,
-        #     nesterov=True,
-        # )
-        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        #     optimizer, T_max=5, eta_min=0.001, verbose=True
-        # )
-        # return [optimizer], [scheduler]
         return torch.optim.AdamW(self.model.parameters(), lr=self.lr)
 
     def training_step(self, batch, batch_idx):
@@ -673,6 +653,7 @@ def compare_bboxes_for_image(
     actual_bboxes,
     draw_bboxes_fn=draw_pascal_voc_bboxes,
     figsize=(20, 20),
+    index = 0,
 ):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
     ax1.imshow(image)
@@ -683,8 +664,8 @@ def compare_bboxes_for_image(
     draw_bboxes_fn(ax1, [], None)
     draw_bboxes_fn(ax2, predicted_bboxes, predicted_class_confidences)
 
-    plt.savefig("./results/images/result.png")
-    plt.show()
+    plt.savefig(f"/home/user-1/results/res/result{index}.png")
+    # plt.show()
 
 
 from fastcore.basics import patch
@@ -719,7 +700,7 @@ def aggregate_prediction_outputs(self: EfficientDetModel, outputs):
 
 
 @patch
-def validation_epoch_end(self: EfficientDetModel, outputs):
+def on_validation_epoch_end(self: EfficientDetModel, outputs):
     """Compute and log training loss and accuracy at the epoch level."""
 
     validation_loss_mean = torch.stack([output["loss"] for output in outputs]).mean()
@@ -754,17 +735,13 @@ def validation_epoch_end(self: EfficientDetModel, outputs):
 
 
 if __name__ == "__main__":
-    dataset_path = Path("C:/Users/fayaz/NTNU/Norsvin/Norsvin/")
+    dataset_path = Path("/home/user-1/pig_dataset/val")
 
-    train_images_path = dataset_path / "train/images"
     val_images_path = dataset_path / "val/images"
-    train_anns_path = dataset_path / "train/annotations"
     val_anns_path = dataset_path / "val/annotations"
 
-    pigs_train_ds = PigsDatasetAdapter(train_images_path, train_anns_path)
     pigs_val_ds = PigsDatasetAdapter(val_images_path, val_anns_path)
     dm = EfficientDetDataModule(
-        train_dataset_adaptor=pigs_train_ds,
         validation_dataset_adaptor=pigs_val_ds,
         num_workers=4,
         batch_size=8,
@@ -785,11 +762,10 @@ if __name__ == "__main__":
         devices=[0],
         max_epochs=30,
         num_sanity_val_steps=1,
-        # callbacks=[EarlyStopping(monitor="val_loss", mode="min")],
         accumulate_grad_batches=3,
     )
     trainer.fit(model, dm)
     torch.save(
         model.state_dict(),
-        f"results/weights/norsvin_trained_effdet_{architecture}_{img_size}_no_barlow",
+        f"/home/user-1/results/norsvin_trained_effdet_{architecture}_{img_size}_no_barlow",
     )
